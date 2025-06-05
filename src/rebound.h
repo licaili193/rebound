@@ -257,6 +257,14 @@ struct reb_integrator_sei {
     double tandtz;      // Cached tan(), z axis
 };
 
+// Global Symplectic Epicycle Integrator SEI_GLOBAL 
+struct reb_integrator_sei_global {
+    double central_mass;    // Mass of central object (used to calculate epicyclic frequencies)
+    
+    // Internal use only
+    double lastdt;      // Cached timestep for optimization
+};
+
 // TRACE (Lu Hernandez & Rein 2024)
 struct reb_integrator_trace {
     int (*S) (struct reb_simulation* const r, const unsigned int i, const unsigned int j);
@@ -622,6 +630,7 @@ struct reb_simulation {
                                         // REB_INTEGRATOR_TES = 20,     // Used to be Terrestrial Exoplanet Simulator (TES) -- Do not reuse.
         REB_INTEGRATOR_WHFAST512 = 21,  // WHFast integrator, optimized for AVX512
         REB_INTEGRATOR_TRACE = 25,      // TRACE integrator (Lu, Hernandez and Rein 2024)
+        REB_INTEGRATOR_SEI_GLOBAL = 26, // Global SEI integrator for particles around central object
     } integrator;
     enum {
         REB_BOUNDARY_NONE = 0,          // Do not check for anything (default)
@@ -641,6 +650,7 @@ struct reb_simulation {
 
     // Datastructures for integrators
     struct reb_integrator_sei ri_sei;               // The SEI struct 
+    struct reb_integrator_sei_global ri_sei_global; // The SEI Global struct
     struct reb_integrator_whfast ri_whfast;         // The WHFast struct 
     struct reb_integrator_whfast512 ri_whfast512;   // The WHFast512 struct 
     struct reb_integrator_saba ri_saba;             // The SABA struct 

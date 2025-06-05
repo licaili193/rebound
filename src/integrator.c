@@ -39,6 +39,7 @@
 #include "integrator_trace.h"
 #include "integrator_leapfrog.h"
 #include "integrator_sei.h"
+#include "integrator_sei_global.h"
 #include "integrator_janus.h"
 #include "integrator_eos.h"
 #include "integrator_bs.h"
@@ -55,6 +56,9 @@ void reb_integrator_part1(struct reb_simulation* r){
             break;
         case REB_INTEGRATOR_SEI:
             reb_integrator_sei_part1(r);
+            break;
+        case REB_INTEGRATOR_SEI_GLOBAL:
+            reb_integrator_sei_global_part1(r);
             break;
         case REB_INTEGRATOR_WHFAST:
             reb_integrator_whfast_part1(r);
@@ -95,6 +99,9 @@ void reb_integrator_part2(struct reb_simulation* r){
             break;
         case REB_INTEGRATOR_SEI:
             reb_integrator_sei_part2(r);
+            break;
+        case REB_INTEGRATOR_SEI_GLOBAL:
+            reb_integrator_sei_global_part2(r);
             break;
         case REB_INTEGRATOR_WHFAST:
             reb_integrator_whfast_part2(r);
@@ -172,6 +179,9 @@ void reb_simulation_synchronize(struct reb_simulation* r){
         case REB_INTEGRATOR_SEI:
             reb_integrator_sei_synchronize(r);
             break;
+        case REB_INTEGRATOR_SEI_GLOBAL:
+            reb_integrator_sei_global_synchronize(r);
+            break;
         case REB_INTEGRATOR_WHFAST:
             reb_integrator_whfast_synchronize(r);
             break;
@@ -206,6 +216,9 @@ void reb_integrator_init(struct reb_simulation* r){
         case REB_INTEGRATOR_SEI:
             reb_integrator_sei_init(r);
             break;
+        case REB_INTEGRATOR_SEI_GLOBAL:
+            reb_integrator_sei_global_init(r);
+            break;
         default:
             break;
     }
@@ -217,6 +230,7 @@ void reb_simulation_reset_integrator(struct reb_simulation* r){
     reb_integrator_ias15_reset(r);
     reb_integrator_mercurius_reset(r);
     reb_integrator_sei_reset(r);
+    reb_integrator_sei_global_reset(r);
     reb_integrator_whfast_reset(r);
     reb_integrator_whfast512_reset(r);
     reb_integrator_saba_reset(r);
