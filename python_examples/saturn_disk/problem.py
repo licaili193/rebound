@@ -11,7 +11,7 @@ Physical Parameters:
 - Ring distances: A-ring (122,170-136,780 km), B-ring (92,000-117,580 km)
 - Particle sizes: 1-4 m radius with power law distribution
 - Surface density: ~40-100 g/cm²
-- G = 6.67428 × 10⁻¹¹ m³/kg/s²
+- G = 6.67428 × 10⁻¹¹ m³/kg/s² (SI units)
 """
 
 import rebound
@@ -51,11 +51,13 @@ def main():
     print("Real Saturn Ring Simulation with SEI Global Integrator")
     print("=" * 55)
     
-    # Create simulation
+    # Create simulation with SI units
     sim = rebound.Simulation()
     
-    # Physical constants (SI units)
-    G = 6.67428e-11          # Gravitational constant [m³/kg/s²]
+    # Set SI units (meters, seconds, kilograms) - this automatically sets G
+    sim.units = ('m', 's', 'kg')
+    
+    # Physical constants and parameters (all in SI units)
     M_saturn = 5.68e26       # Saturn mass [kg] 
     R_saturn = 60268e3       # Saturn equatorial radius [m]
     
@@ -69,33 +71,15 @@ def main():
     
     # Target orbital frequency for reference (at ~130,000 km)
     ref_distance = 130000e3  # Reference distance [m]
-    ref_omega = np.sqrt(G * M_saturn / ref_distance**3)  # [rad/s]
+    ref_omega = np.sqrt(sim.G * M_saturn / ref_distance**3)  # [rad/s]
     
-    print(f"Physical Parameters:")
+    print(f"Physical Parameters (SI units):")
     print(f"  Saturn mass: {M_saturn:.2e} kg")
     print(f"  Saturn radius: {R_saturn/1000:.0f} km")
     print(f"  Ring range: {ring_inner/1000:.0f} - {ring_outer/1000:.0f} km")
+    print(f"  Gravitational constant G: {sim.G:.2e} m³/kg/s²")
     print(f"  Reference orbital frequency: {ref_omega:.2e} rad/s")
     print(f"  Reference orbital period: {2*np.pi/ref_omega/3600:.2f} hours")
-    
-    # Set simulation units (scale to more manageable numbers)
-    # Use Saturn radius as length unit, Saturn mass as mass unit
-    length_unit = R_saturn     # 1 unit = Saturn radius
-    mass_unit = M_saturn       # 1 unit = Saturn mass
-    time_unit = 1.0 / ref_omega  # 1 unit = reference orbital period
-    
-    print(f"\nSimulation Units:")
-    print(f"  Length unit: {length_unit/1000:.0f} km")
-    print(f"  Mass unit: {mass_unit:.2e} kg") 
-    print(f"  Time unit: {time_unit/3600:.2f} hours")
-    
-    # Convert to simulation units
-    sim.G = 1.0  # G*M_saturn*time_unit²/length_unit³ = 1
-    central_mass = 1.0  # Saturn mass in units
-    ring_inner_sim = ring_inner / length_unit
-    ring_outer_sim = ring_outer / length_unit
-    
-    print(f"  Ring range (sim units): {ring_inner_sim:.3f} - {ring_outer_sim:.3f}")
     
     # Generate particles
     N_particles = 50  # More particles for realistic simulation
@@ -108,22 +92,22 @@ def main():
     
     for i in range(N_particles):
         # Random position in A-ring
-        r = ring_inner_sim + (ring_outer_sim - ring_inner_sim) * np.random.random()
+        r = ring_inner + (ring_outer - ring_inner) * np.random.random()
         theta = 2 * np.pi * np.random.random()
         
         # Convert to Cartesian coordinates  
         x = r * np.cos(theta)
         y = r * np.sin(theta)
-        z = 0.000002 * np.random.normal()  # Small vertical displacement
+        z = 2.0 * np.random.normal()  # Small vertical displacement [m]
         
         # Circular orbital velocity (Keplerian)
-        v_circ = np.sqrt(central_mass / r)  # In simulation units
+        v_circ = np.sqrt(sim.G * M_saturn / r)  # [m/s]
         vx = -v_circ * np.sin(theta)
         vy = v_circ * np.cos(theta)
         vz = 0.0
         
         # Add small random velocity perturbations (typical ~1-10 m/s)
-        v_random = 10.0 / (length_unit/time_unit)  # Convert 10 m/s to sim units
+        v_random = 10.0  # [m/s]
         vx += v_random * 0.1 * np.random.normal()
         vy += v_random * 0.1 * np.random.normal()
         
@@ -132,61 +116,55 @@ def main():
         volume = (4./3.) * np.pi * radius_m**3
         mass_kg = particle_density * volume
         
-        # Convert to simulation units
-        mass_sim = mass_kg / mass_unit
-        radius_sim = radius_m / length_unit
-        
-        # Add particle
-        sim.add(m=mass_sim, r=radius_sim, x=x, y=y, z=z, vx=vx, vy=vy, vz=vz)
-        total_mass += mass_sim
+        # Add particle (all in SI units)
+        sim.add(m=mass_kg, r=radius_m, x=x, y=y, z=z, vx=vx, vy=vy, vz=vz)
+        total_mass += mass_kg
     
     print(f"✓ Added {sim.N} particles")
-    print(f"  Total particle mass: {total_mass:.2e} simulation units")
-    print(f"  Total particle mass: {total_mass * mass_unit:.2e} kg")
-    print(f"  Average particle radius: {np.mean([p.r for p in sim.particles]) * length_unit:.1f} m")
+    print(f"  Total particle mass: {total_mass:.2e} kg")
+    print(f"  Average particle radius: {np.mean([p.r for p in sim.particles]):.1f} m")
     
     # Configure SEI Global integrator
     sim.integrator = "sei_global"
-    sim.ri_sei_global.central_mass = central_mass
+    sim.ri_sei_global.central_mass = M_saturn  # Saturn mass in kg
     
     # Collision detection for ring particles
     sim.collision = "tree"
     sim.collision_resolve = "hardsphere"
-    sim.gravity    = "tree"
+    sim.gravity = "tree"
     
     # Coefficient of restitution (Bridges et al. formula for ring particles)
     def cor_bridges(rel_velocity_magnitude):
         """Velocity-dependent coefficient of restitution for ring particles."""
-        # Convert to m/s for the formula
-        v_ms = rel_velocity_magnitude * (length_unit / time_unit)
-        eps = 0.32 * pow(abs(v_ms)*100., -0.234)
+        # rel_velocity_magnitude is already in m/s
+        eps = 0.32 * pow(abs(rel_velocity_magnitude)*100., -0.234)
         eps = max(0.0, min(1.0, eps))  # Clamp between 0 and 1
         return eps
     
     # Set timestep (much smaller than orbital period)
-    orbital_period = 2 * np.pi  # In simulation time units  
-    sim.dt = orbital_period / 1000.0  # 1/1000 of orbital period
+    orbital_period = 2 * np.pi / ref_omega  # [s]
+    sim.dt = orbital_period / 1000.0  # 1/1000 of orbital period [s]
     
     print(f"\nSimulation Configuration:")
     print(f"  Integrator: sei_global")
-    print(f"  Central mass: {sim.ri_sei_global.central_mass}")
-    print(f"  Timestep: {sim.dt:.6f} time units ({sim.dt * time_unit:.1f} s)")
+    print(f"  Central mass: {sim.ri_sei_global.central_mass:.2e} kg")
+    print(f"  Timestep: {sim.dt:.1f} s ({sim.dt/3600:.4f} hours)")
     print(f"  Collision detection: {sim.collision}")
     
     # Move to center of mass frame (though should be close already)
     sim.move_to_com()
     
     # Calculate initial energy (including central mass potential)
-    E_initial = calculate_total_energy(sim, central_mass)
-    print(f"  Initial total energy: {E_initial:.6e}")
+    E_initial = calculate_total_energy(sim, M_saturn)
+    print(f"  Initial total energy: {E_initial:.6e} J")
     
     # Integration parameters - much shorter for real-time scales
-    t_max = 3.0 * orbital_period  # 3 orbital periods
+    t_max = 3.0 * orbital_period  # 3 orbital periods [s]
     N_outputs = 300
     times = np.linspace(0, t_max, N_outputs)
     
-    real_time_max = t_max * time_unit / 3600  # Convert to hours
-    print(f"\nIntegrating for {t_max:.1f} time units ({real_time_max:.2f} hours)...")
+    real_time_max = t_max / 3600  # Convert to hours
+    print(f"\nIntegrating for {t_max:.0f} s ({real_time_max:.2f} hours)...")
     
     # Storage for results
     all_positions = []
@@ -210,36 +188,36 @@ def main():
         all_times.append(t)
         
         # Monitor energy conservation (including central mass potential)
-        E = calculate_total_energy(sim, central_mass)
+        E = calculate_total_energy(sim, M_saturn)
         energies.append(E)
         
         # Progress indicator
         if i % (N_outputs // 10) == 0:
             progress = 100 * i / len(times)
             dE = abs((E - E_initial) / E_initial) if E_initial != 0 else 0
-            real_time = t * time_unit / 3600
+            real_time = t / 3600
             print(f"  Progress: {progress:5.1f}% | t = {real_time:6.2f} hrs | ΔE/E = {dE:.2e}")
     
     print(f"\nSimulation completed successfully!")
-    print(f"  Final energy: {energies[-1]:.6e}")
+    print(f"  Final energy: {energies[-1]:.6e} J")
     print(f"  Energy conservation: ΔE/E = {abs((energies[-1] - E_initial)/E_initial):.2e}")
     print(f"  Note: Energy calculation includes central mass potential energy")
     
     # Create comprehensive plots
     create_realistic_plots(sim, all_times, all_positions, all_velocities, energies, 
-                          length_unit, time_unit, mass_unit, M_saturn, R_saturn)
+                          M_saturn, R_saturn)
     
     return sim, all_times, all_positions
 
 def create_realistic_plots(sim, times, all_positions, all_velocities, energies,
-                          length_unit, time_unit, mass_unit, M_saturn, R_saturn):
+                          M_saturn, R_saturn):
     """Create realistic visualization plots with proper units."""
     
     print("Creating realistic Saturn ring visualization...")
     
-    # Convert to physical units for plotting
-    positions = np.array(all_positions) * length_unit / 1000  # Convert to km
-    times_hours = np.array(times) * time_unit / 3600  # Convert to hours
+    # Convert to convenient units for plotting (positions already in meters)
+    positions = np.array(all_positions) / 1000  # Convert to km
+    times_hours = np.array(times) / 3600  # Convert to hours
     N_particles = positions.shape[1]
     
     # Create figure with multiple subplots
@@ -254,8 +232,8 @@ def create_realistic_plots(sim, times, all_positions, all_velocities, energies,
     final_y = positions[-1, :, 1]
     final_r = np.sqrt(final_x**2 + final_y**2)
     
-    # Scale marker sizes by particle mass (convert back to reasonable range)
-    particle_masses = [p.m * mass_unit for p in sim.particles]  # Convert to kg
+    # Scale marker sizes by particle mass
+    particle_masses = [p.m for p in sim.particles]  # Already in kg
     marker_sizes = 20 + 100 * np.array(particle_masses) / np.max(particle_masses)  # Scale 20-120
     
     scatter = ax1.scatter(final_x, final_y, c=final_r, s=marker_sizes, alpha=0.8, cmap='plasma')
@@ -442,9 +420,9 @@ if __name__ == "__main__":
     try:
         sim, times, positions = main()
         print(f"\nReal Saturn ring simulation completed successfully!")
-        print(f"   Used realistic physical parameters")
+        print(f"   Used standard SI units (m, kg, s)")
         print(f"   Simulated {sim.N} ring particles in Saturn's A-ring")
-        print(f"   Generated {len(times)} trajectory points over {times[-1]:.1f} time units")
+        print(f"   Generated {len(times)} trajectory points over {times[-1]/3600:.1f} hours")
         print(f"   Files created:")
         print(f"   - real_saturn_ring_simulation.png (comprehensive plots)")
         print(f"   - real_saturn_ring_animation.gif (ring evolution)")

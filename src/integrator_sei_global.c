@@ -42,9 +42,10 @@
 
 static void operator_H012_global(double dt, double OMEGA, double OMEGAZ, struct reb_particle* p);
 static void operator_phi1_global(double dt, struct reb_particle* p);
-static void global_to_local_coordinates(struct reb_particle* p, double* x_local, double* y_local, double* z_local, double* vx_local, double* vy_local, double* vz_local, double central_mass);
-static void local_to_global_coordinates(double x_local, double y_local, double z_local, double vx_local, double vy_local, double vz_local, struct reb_particle* p, double central_mass);
-static double calculate_omega(double r, double central_mass);
+static void global_to_local_coordinates(struct reb_particle* p, double* x_local, double* y_local, double* z_local, double* vx_local, double* vy_local, double* vz_local, double central_mass, double G);
+static void local_to_global_coordinates(double x_local, double y_local, double z_local, double vx_local, double vy_local, double vz_local, struct reb_particle* p, double central_mass, double G);
+static double calculate_omega(double r, double central_mass, double G);
+static void apply_global_rotation(struct reb_particle* p, double OMEGA, double dt_half);
 
 void reb_integrator_sei_global_init(struct reb_simulation* const r){
     /**
@@ -72,11 +73,10 @@ void reb_integrator_sei_global_part1(struct reb_simulation* const r){
         // Convert global coordinates to local shearing coordinates
         double x_local, y_local, z_local, vx_local, vy_local, vz_local;
         global_to_local_coordinates(&particles[i], &x_local, &y_local, &z_local, 
-                                   &vx_local, &vy_local, &vz_local, central_mass);
+                                   &vx_local, &vy_local, &vz_local, central_mass, r->G);
         
-        // Calculate orbital frequency for this particle's current distance
-        double dist = sqrt(particles[i].x*particles[i].x + particles[i].y*particles[i].y + particles[i].z*particles[i].z);
-        double OMEGA = calculate_omega(dist, central_mass);
+        // Calculate orbital frequency using local y coordinate (radial distance)
+        double OMEGA = calculate_omega(y_local, central_mass, r->G);
         double OMEGAZ = OMEGA; // For Keplerian motion, vertical frequency equals radial frequency
         
         // Create a temporary particle with local coordinates
@@ -94,7 +94,10 @@ void reb_integrator_sei_global_part1(struct reb_simulation* const r){
         // Convert back to global coordinates
         local_to_global_coordinates(temp_p.x, temp_p.y, temp_p.z, 
                                    temp_p.vx, temp_p.vy, temp_p.vz, 
-                                   &particles[i], central_mass);
+                                   &particles[i], central_mass, r->G);
+        
+        // Apply global rotation of the local patch
+        apply_global_rotation(&particles[i], OMEGA, r->dt / 2.0);
     }
     
     r->t += r->dt/2.;
@@ -116,11 +119,10 @@ void reb_integrator_sei_global_part2(struct reb_simulation* r){
         // Convert to local coordinates
         double x_local, y_local, z_local, vx_local, vy_local, vz_local;
         global_to_local_coordinates(&particles[i], &x_local, &y_local, &z_local, 
-                                   &vx_local, &vy_local, &vz_local, central_mass);
+                                   &vx_local, &vy_local, &vz_local, central_mass, r->G);
         
-        // Calculate orbital frequency for current position
-        double dist = sqrt(particles[i].x*particles[i].x + particles[i].y*particles[i].y + particles[i].z*particles[i].z);
-        double OMEGA = calculate_omega(dist, central_mass);
+        // Calculate orbital frequency using local y coordinate (radial distance)
+        double OMEGA = calculate_omega(y_local, central_mass, r->G);
         double OMEGAZ = OMEGA;
         
         // Create temporary particle with local coordinates
@@ -138,7 +140,10 @@ void reb_integrator_sei_global_part2(struct reb_simulation* r){
         // Convert back to global coordinates
         local_to_global_coordinates(temp_p.x, temp_p.y, temp_p.z, 
                                    temp_p.vx, temp_p.vy, temp_p.vz, 
-                                   &particles[i], central_mass);
+                                   &particles[i], central_mass, r->G);
+        
+        // Apply global rotation of the local patch
+        apply_global_rotation(&particles[i], OMEGA, r->dt / 2.0);
     }
     
     r->t += r->dt/2.;
@@ -159,12 +164,11 @@ void reb_integrator_sei_global_reset(struct reb_simulation* r){
  * @param central_mass Mass of central object
  * @return Orbital frequency OMEGA
  */
-static double calculate_omega(double r, double central_mass){
+static double calculate_omega(double r, double central_mass, double G){
     // For Keplerian motion: OMEGA = sqrt(GM/r^3)
-    // We assume G=1 in simulation units
     // NEGATIVE sign for counter-clockwise rotation (standard astronomical convention)
     if (r <= 1e-10) return -1e10;  // Avoid division by zero, set high frequency for very close particles
-    return -sqrt(central_mass / (r*r*r));  // Negative for counter-clockwise motion
+    return -sqrt(G * central_mass / (r*r*r));  // Negative for counter-clockwise motion
 }
 
 /**
@@ -175,17 +179,46 @@ static double calculate_omega(double r, double central_mass){
  * @param central_mass Mass of central object
  */
 static void global_to_local_coordinates(struct reb_particle* p, double* x_local, double* y_local, double* z_local,
-                                       double* vx_local, double* vy_local, double* vz_local, double central_mass){
-    // For SEI, we work in the local shearing sheet coordinates
-    // The transformation is simpler - we just use the current position and velocity
-    // The SEI integrator handles the epicyclic motion in its own coordinate system
+                                       double* vx_local, double* vy_local, double* vz_local, double central_mass, double G){
+    // Transform from global Cartesian to local shearing sheet coordinates
+    // In SEI, the local patch is centered at the guiding center, so particles
+    // are at the origin (0,0) in local coordinates with velocity perturbations
     
-    *x_local = p->x;
-    *y_local = p->y;
-    *z_local = p->z;
-    *vx_local = p->vx;
-    *vy_local = p->vy;
-    *vz_local = p->vz;
+    // Calculate distance and angle from center for the guiding center
+    double r = sqrt(p->x * p->x + p->y * p->y);
+    
+    if (r < 1e-10) {
+        // Handle particles very close to center
+        *x_local = 0.0;
+        *y_local = r;  // Keep radial distance for OMEGA calculation
+        *z_local = p->z;
+        *vx_local = p->vx;
+        *vy_local = p->vy;
+        *vz_local = p->vz;
+        return;
+    }
+    
+    double theta = atan2(p->y, p->x);  // Azimuthal angle
+    double cos_theta = cos(theta);
+    double sin_theta = sin(theta);
+    
+    // In local shearing sheet: particle is at origin of the local patch
+    *x_local = 0.0;   // Azimuthal offset from guiding center
+    *y_local = r;     // Radial distance (for OMEGA calculation)  
+    *z_local = p->z;  // Vertical (small, preserved)
+    
+    // Transform velocities to local frame (subtract orbital motion)
+    // Orbital velocity at radius r: v_orbital = sqrt(GM/r) in azimuthal direction
+    double v_orbital = sqrt(G * central_mass / r);
+    
+    // Rotate velocities to local coordinate system
+    double vx_rotated = -sin_theta * p->vx + cos_theta * p->vy;  // Azimuthal velocity
+    double vy_rotated =  cos_theta * p->vx + sin_theta * p->vy;  // Radial velocity
+    
+    // Subtract the orbital motion to get perturbation velocities
+    *vx_local = vx_rotated - v_orbital;  // Azimuthal perturbation velocity
+    *vy_local = vy_rotated;              // Radial perturbation velocity
+    *vz_local = p->vz;                   // Vertical velocity (unchanged)
 }
 
 /**
@@ -197,14 +230,59 @@ static void global_to_local_coordinates(struct reb_particle* p, double* x_local,
  */
 static void local_to_global_coordinates(double x_local, double y_local, double z_local, 
                                        double vx_local, double vy_local, double vz_local,
-                                       struct reb_particle* p, double central_mass){
-    // Update particle with the new coordinates from SEI integration
-    p->x = x_local;
-    p->y = y_local;
-    p->z = z_local;
-    p->vx = vx_local;
-    p->vy = vy_local;
-    p->vz = vz_local;
+                                       struct reb_particle* p, double central_mass, double G){
+    // Transform from local shearing sheet coordinates back to global Cartesian
+    // The local patch was centered at the guiding center, so we need to add back
+    // the global orbital motion and account for any rotation of the patch
+    
+    // Get the original guiding center position (before H012 integration)
+    double r_orig = sqrt(p->x * p->x + p->y * p->y);
+    
+    if (r_orig < 1e-10) {
+        // Handle particles very close to center
+        p->x = x_local;
+        p->y = y_local;  
+        p->z = z_local;
+        p->vx = vx_local;
+        p->vy = vy_local;
+        p->vz = vz_local;
+        return;
+    }
+    
+    double theta_orig = atan2(p->y, p->x);  // Original azimuthal angle
+    
+    // The guiding center may have rotated during the integration step
+    // Calculate new orbital frequency at the new radial distance y_local
+    double OMEGA = calculate_omega(y_local, central_mass, G);
+    
+    // Update the azimuthal angle: particles move with the local patch
+    // Note: OMEGA is negative for counter-clockwise motion
+    // We need to add the rotation during the timestep, but we don't have dt here
+    // So we'll use the original orientation for now and let the integrator handle the rotation
+    double theta_new = theta_orig;
+    
+    double cos_theta = cos(theta_new);
+    double sin_theta = sin(theta_new);
+    
+    // Position in global coordinates: place at the guiding center + local offsets
+    // For SEI, x_local and y_local represent small perturbations
+    double r_new = y_local;  // New radial distance
+    
+    p->x = r_new * cos_theta + x_local * (-sin_theta);  // Add azimuthal perturbation
+    p->y = r_new * sin_theta + x_local * cos_theta;     // Add azimuthal perturbation  
+    p->z = z_local;                                     // Vertical unchanged
+    
+    // Velocity in global coordinates: add back orbital motion + rotated perturbations
+    double v_orbital = sqrt(G * central_mass / r_new);  // Orbital velocity at new radius
+    
+    // Rotate perturbation velocities back to global frame
+    double vx_global_pert = -sin_theta * vx_local + cos_theta * vy_local;
+    double vy_global_pert =  cos_theta * vx_local + sin_theta * vy_local;
+    
+    // Add back the orbital motion
+    p->vx = vx_global_pert + v_orbital * (-sin_theta);  // Add orbital velocity
+    p->vy = vy_global_pert + v_orbital * cos_theta;     // Add orbital velocity
+    p->vz = vz_local;                                   // Vertical unchanged
 }
 
 /**
@@ -264,4 +342,29 @@ static void operator_phi1_global(double dt, struct reb_particle* p){
     p->vx += p->ax * dt;
     p->vy += p->ay * dt;
     p->vz += p->az * dt;
+}
+
+/**
+ * @brief Apply global rotation to particle due to rotating local patch
+ * @param p Particle to rotate
+ * @param OMEGA Orbital frequency 
+ * @param dt_half Half timestep (dt/2)
+ */
+static void apply_global_rotation(struct reb_particle* p, double OMEGA, double dt_half){
+    // The local shearing sheet itself rotates around the central mass
+    double theta_rotation = OMEGA * dt_half;
+    double cos_rot = cos(theta_rotation);
+    double sin_rot = sin(theta_rotation);
+    
+    // Rotate position
+    double x_rot = cos_rot * p->x - sin_rot * p->y;
+    double y_rot = sin_rot * p->x + cos_rot * p->y;
+    p->x = x_rot;
+    p->y = y_rot;
+    
+    // Rotate velocity  
+    double vx_rot = cos_rot * p->vx - sin_rot * p->vy;
+    double vy_rot = sin_rot * p->vx + cos_rot * p->vy;
+    p->vx = vx_rot;
+    p->vy = vy_rot;
 } 
